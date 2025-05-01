@@ -109,21 +109,37 @@ if st.button('Generate LIME plot'):
             clf = joblib.load(os.path.join(models_dir, f"{selected}.pkl"))
 
             def remove_monotonic_constraint(model):
+                # Only attempt to remove the attribute if it exists
                 if hasattr(model, 'monotonic_cst'):
-                    del model.monotonic_cst
-                # Recursively patch ensemble models
+                    setattr(model, 'monotonic_cst', None)
+                
+                # Recursively patch ensemble models if they have estimators
                 if hasattr(model, 'estimators_'):
                     for estimator in model.estimators_:
                         remove_monotonic_constraint(estimator)
+                # Also check for base_estimator in case of AdaBoost and similar
+                if hasattr(model, 'base_estimator') and model.base_estimator is not None:
+                    remove_monotonic_constraint(model.base_estimator)
                 return model
             
-            if any(x in selected.lower() for x in ['tree', 'forest', 'ensemble']):
-                clf = remove_monotonic_constraint(clf)
+            # Apply the fix to tree-based models
+            if any(x in selected.lower() for x in ['tree', 'forest', 'ensemble', 'boost']):
+                try:
+                    clf = remove_monotonic_constraint(clf)
+                except Exception as e:
+                    st.warning(f"Model patching warning (non-critical): {e}")
             
-            # Create prediction wrapper
+            # Create prediction wrapper with error handling
             def predict_fn(X):
                 X = np.nan_to_num(X, nan=0.0)
-                return clf.predict_proba(X)
+                try:
+                    return clf.predict_proba(X)
+                except Exception as e:
+                    st.warning(f"Prediction function error: {e}. Falling back to binary predictions.")
+                    # Fallback for models that don't have predict_proba
+                    preds = clf.predict(X)
+                    # Convert to pseudo-probabilities
+                    return np.vstack([1-preds, preds]).T
 
             # Build LIME explainer
             feat_names = X_train_df.columns[mask]
@@ -145,15 +161,20 @@ if st.button('Generate LIME plot'):
                 top_labels=1
             )
 
-            # Visualization
+            # Visualization with fallback options
             try:
                 lime_html = exp.as_html()
                 st.components.v1.html(lime_html, height=800)
             except Exception as e:
                 st.warning(f"HTML rendering failed: {e}. Using fallback visualization.")
-                fig, ax = plt.subplots(figsize=(10, 6))
-                exp.as_pyplot_figure(label=1)
-                st.pyplot(fig)
+                try:
+                    fig, ax = plt.subplots(figsize=(10, 6))
+                    exp.as_pyplot_figure(label=1)
+                    st.pyplot(fig)
+                except Exception as e:
+                    st.warning(f"PyPlot visualization failed: {e}. Showing raw data.")
+                
+                # Always show the data as a final fallback
                 st.dataframe(pd.DataFrame(exp.as_list(label=1), columns=["Feature", "Impact"]))
 
         except Exception as e:
