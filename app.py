@@ -106,19 +106,19 @@ if st.button('Generate LIME plot'):
             X_train_sel = X_train_trans[:,mask]
 
             # Modified model loading with compatibility hacks
-            try:
-                # Try new joblib format first
-                clf = joblib.load(
-                    os.path.join(models_dir, f"{selected}.pkl"),
-                    safe_load=False  # For joblib >= 1.2
-                )
-            except TypeError:
-                # Fallback for older joblib versions
-                clf = joblib.load(os.path.join(models_dir, f"{selected}.pkl"))
+            clf = joblib.load(os.path.join(models_dir, f"{selected}.pkl"))
 
-            # Monkey-patch for scikit-learn compatibility
-            if hasattr(clf, 'monotonic_cst') and clf.monotonic_cst is None:
-                del clf.monotonic_cst
+            def remove_monotonic_constraint(model):
+                if hasattr(model, 'monotonic_cst'):
+                    del model.monotonic_cst
+                # Recursively patch ensemble models
+                if hasattr(model, 'estimators_'):
+                    for estimator in model.estimators_:
+                        remove_monotonic_constraint(estimator)
+                return model
+            
+            if any(x in selected.lower() for x in ['tree', 'forest', 'ensemble']):
+                clf = remove_monotonic_constraint(clf)
             
             # Create prediction wrapper
             def predict_fn(X):
@@ -158,4 +158,3 @@ if st.button('Generate LIME plot'):
 
         except Exception as e:
             st.error(f"Error generating LIME explanation: {e}")
-            st.error("Please ensure all dependencies match the training environment versions")
